@@ -8,7 +8,7 @@
             sendStatus: {value: true, required:true},
 
             // Configuration
-            keepAlive: {value: 1, required:true},
+            keepAlive: {value: 60, required:true},
             cycleDelay: {value: 60, required:true},
             offTime: {value: 5, required:true},
 
@@ -20,6 +20,12 @@
             maxTemp: {value: 150, required:true},
             tempValid: {value: 1, required:true},
             swapDelay: {value: 60, required:true},
+
+            // Weight thresholds
+            heatUpperWeight: {value: 4, required:true},
+            heatLowerWeight: {value: 3, required:true},
+            coolUpperWeight: {value: 4, required:true},
+            coolLowerWeight: {value: 3, required:true},
 
             // Outputs
             onPayloadType: { value: 'str' },
@@ -72,8 +78,8 @@
         <label title="Some receivers will need regular keep alive messages to prevent a safety cut off.  A regular update also ensures devices are kept in sync if a message is lost. 0 means no keep alive." for="node-input-keepAlive">
             <i class="fa fa-heartbeat"></i> Keep Alive
         </label>
-        <input type="number" id="node-input-keepAlive" min="0" max="60" style="width: 60px">
-        <label>minute(s)</label>
+        <input type="number" id="node-input-keepAlive" min="10" max="3600" style="width: 60px">
+        <label>seconds</label>
     </div>
     <div class="form-row">
         <label title="Duration for which the input temperatures are valid.  Protects against cases where the DAT sensor ot temperature input fails.  If the time expires a safety cut off will remain active until a new temperature reading is received." for="node-input-tempValid">
@@ -126,6 +132,31 @@
             </label>
             <input type="number" id="node-input-maxTemp" min="110" max="160" step="1" style="width: 60px">
             <label>degrees</label>
+        </div>
+        <h4>Weight Thresholds</h4>
+        <div class="form-row">
+            <label title="Heat lower weight threshold" for="node-input-heatLowerWeight">
+                <i class="fa fa-minus-circle"></i> Heat Lower
+            </label>
+            <input type="number" id="node-input-heatLowerWeight" min="1" max="100" step="1" style="width: 60px">
+        </div>
+        <div class="form-row">
+            <label title="Heat upper weight threshold" for="node-input-heatUpperWeight">
+                <i class="fa fa-plus-circle"></i> Heat Upper
+            </label>
+            <input type="number" id="node-input-heatUpperWeight" min="2" max="100" step="1" style="width: 60px">
+        </div>
+        <div class="form-row">
+            <label title="Cool lower weight threshold" for="node-input-coolLowerWeight">
+                <i class="fa fa-minus-circle"></i> Cool Lower
+            </label>
+            <input type="number" id="node-input-coolLowerWeight" min="1" max="100" step="1" style="width: 60px">
+        </div>
+        <div class="form-row">
+            <label title="Cool upper weight threshold" for="node-input-coolUpperWeight">
+                <i class="fa fa-plus-circle"></i> Cool Upper
+            </label>
+            <input type="number" id="node-input-coolUpperWeight" min="2" max="100" step="1" style="width: 60px">
         </div>
     </div>
     <h4>Outputs</h4>
