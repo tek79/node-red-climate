@@ -1,5 +1,5 @@
 {
-  "name": "node-red-climate",
+  "name": "node-red-contrib-climate",
   "version": "1.0.0",
   "description": "Climate control via node-red",
   "bundleDependencies": false,
@@ -21,6 +21,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/tek79/node-red-climate.git"
+    "url": "https://github.com/tek79/node-red-contrib-climate.git"
   }
 }
