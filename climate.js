@@ -22,7 +22,7 @@ module.exports = function(RED) {
         this.starting = true;
 
         // Configuration
-        this.keepAliveMs = parseFloat(config.keepAlive) * 1000 * 60; //< mins to ms
+        this.keepAliveMs = parseFloat(config.keepAlive) * 1000; //< seconds to ms
         this.cycleDelayMs = parseFloat(config.cycleDelay) * 1000; //< seconds to ms
         this.offTimeMs = parseFloat(config.offTime) * 1000 * 60; //< minutes to ms
         this.boostDurationMins = config.boostDuration;
@@ -68,10 +68,13 @@ module.exports = function(RED) {
         this.lastChange = null;
         this.lastTemp = null;
         this.lastHeatTime = null;
+        this.lastHeatSetpoint = null;
         this.lastCoolTime = null;
+        this.lastCoolSetpoint = null;
         this.lastSend = null;
         this.lastOffTime = moment();
-        this.lastAction = 'off';
+        this.lastAction = null;
+        this.lastMode = null;
 
         // Handle direct inputs
         this.on("input", function(msg, send, done) {
@@ -234,7 +237,7 @@ module.exports = function(RED) {
         this.setStatus = function(msg) {
             node.status(msg);
             if (node.sendStatus) {
-                node.send([ null, null, { topic: this.sendTopic, payload: msg }]);
+                //node.send([ null, null, { topic: this.sendTopic, payload: msg }]);
             }
         }
 
@@ -247,8 +250,12 @@ module.exports = function(RED) {
             let mode = s.preset === boostValue ? s.mode + '*' : s.mode;
             let msg = { fill: col, shape:'dot' };
 
-            if (s.mode === 'heat' || node.lastAction === 'heating') { s.setpoint = node.setpoint_heat.get(); }
-            if (s.mode === 'cool' || node.lastAction === 'cooling') { s.setpoint = node.setpoint_cool.get(); }
+            //if (s.mode === 'heat' || node.lastAction === 'heating') { s.setpoint = node.setpoint_heat.get(); }
+            //if (s.mode === 'cool' || node.lastAction === 'cooling') { s.setpoint = node.setpoint_cool.get(); }
+
+            if (s.mode === 'heat') { s.setpoint = node.setpoint_heat.get(); }
+            if (s.mode === 'cool') { s.setpoint = node.setpoint_cool.get(); }
+            if (s.mode === 'heat_cool') { s.setpoint = node.setpoint_heat.get() + '-' + node.setpoint_cool.get(); }
 
             if (s.action === 'idle') {
                 msg.text = `${pre}waiting for temp...`;
@@ -259,38 +266,15 @@ module.exports = function(RED) {
                 msg.text = `${pre}mode=${mode}`;
             }
 
-            // if the mode is heat_cool and the current temperature is in the deadband, differential output = 0
-            if (s.mode === 'heat_cool') {
-                if (node.lastHeatCool != undefined) {
-                    var deadband = false;
-                    // high pass (heat) and low pass (cool) for differential temp output
-                    if (node.lastHeatCool === 'heating' && s.temp >= node.setpoint_heat.get()) deadband = true;
-                    if (node.lastHeatCool === 'cooling' && s.temp <= node.setpoint_cool.get()) deadband = true;
-                }
-            }
-
-            s.differentialTemp = s.tempValid == true && s.mode != offValue && !deadband ? parseFloat((node.temp.get() - s.setpoint).toFixed(1)) : 0;
-            
-	    s.weight =  s.tempValid == true && s.mode != offValue ? this.zoneWeight : 0;
-	    s.trigger = this.triggerZone;;
-		
+            // update on every input message
             node.status(msg);
-            if (node.sendStatus) {
-                //node.send([ null, null, { topic: this.sendTopic, payload: msg, status: s }]);
-                // update outputs on every input message
-                node.send([
-                    { topic: this.sendTopic, payload: s.heatOutput ? this.onPayload : this.offPayload}, 
-                    { topic: this.sendTopic, payload: s.coolOutput ? this.onPayload : this.offPayload},
-                    { topic: this.sendTopic, payload: msg, status: s }
-                ]);
-            }
         }
 
         this.calcSetpointAction = function(s, now) {
-
             // Waiting for input
             if (!s.tempTime || now.diff(s.tempTime) >= node.tempValidMs) {
                 s.tempValid = false;
+                s.pending = true;
                 return 'idle';
             }
 
@@ -298,43 +282,55 @@ module.exports = function(RED) {
                 s.tempValid = true;
             }
 
+            // if the mode is heat_cool and the current temperature is in the deadband, differential output = 0
+            if (s.mode === 'heat_cool' && s.tempValid == true) { 
+                if (s.temp < node.setpoint_heat.get()) { 
+                    s.differentialTemp = parseFloat((s.temp - s.setpoint_heat).toFixed(1));
+                } else if (s.temp > node.setpoint_cool.get()) { 
+                    s.differentialTemp = parseFloat((s.temp - s.setpoint_cool).toFixed(1));
+                } else {
+                    s.differentialTemp = 0;
+                }
+            } else if (s.mode === 'heat' && s.tempValid == true) { 
+                if (s.temp < node.setpoint_heat.get()) { 
+                    s.differentialTemp = parseFloat((s.temp - s.setpoint_heat).toFixed(1));
+                } else {
+                    s.differentialTemp = 0;
+                }
+            } else if (s.mode === 'cool' && s.tempValid == true) { 
+                if (s.temp > node.setpoint_cool.get()) { 
+                    s.differentialTemp = parseFloat((s.temp - s.setpoint_cool).toFixed(1));
+                } else {
+                    s.differentialTemp = 0;
+                }
+            } else { 
+                s.differentialTemp = 0;
+            }
+
+	    s.weight =  s.tempValid == true && s.mode != offValue ? node.zoneWeight : 0;
+	    s.trigger = node.triggerZone;
+
             // Get Current Capability
             let canHeat = node.hasHeating && (s.mode === 'heat_cool' || s.mode === 'heat');
             let canCool = node.hasCooling && (s.mode === 'heat_cool' || s.mode === 'cool');
 
-            // Use direction of temperature change to improve calculation and reduce ping pong effect
-            var isTempRising = node.lastTemp ? s.temp - node.lastTemp > 0.01 : false;
-            var isTempFalling = node.lastTemp ? s.temp - node.lastTemp < -0.01 : false;
-            
-            // Store direction on temperature change only
-            if (s.temp != node.lastTemp) {
-                node.lastDirection = null;
-                if (node.lastAction === 'heating') isTempFalling = false;
-                if (node.lastAction === 'cooling') isTempRising = false;
-                if (isTempFalling) node.lastDirection = 'falling';
-                if (isTempRising) node.lastDirection = 'rising';
+            if (node.lastAction === 'heating') { var heatPoint = s.setpoint_heat; } else { var heatPoint = (s.setpoint_heat - node.tolerance + 0.1); }			
+            if (node.lastAction === 'cooling') { var coolPoint = s.setpoint_cool; } else { var coolPoint = (s.setpoint_cool + node.tolerance - 0.1); }
+
+            if (canHeat && (s.temp < heatPoint)) {
+                if ((!node.lastCoolTime || now.diff(node.lastCoolTime) >= node.swapDelayMs ) && (now.diff(node.lastOffTime) >= node.offTimeMs)) {
+                    return 'heating';
+                } else if ((now.diff(node.lastCoolTime) < node.swapDelayMs) || now.diff(node.lastOffTime) < node.offTimeMs) {
+                    s.pending = true;
+                }
+            } else if (canCool && (s.temp > coolPoint)) {
+                if ((!node.lastHeatTime || now.diff(node.lastHeatTime) >= node.swapDelayMs) && (now.diff(node.lastOffTime) >= node.offTimeMs)) {
+                    return 'cooling';
+                } else if ((now.diff(node.lastHeatTime) < node.swapDelayMs) || now.diff(node.lastOffTime) < node.offTimeMs) {
+                    s.pending = true;
+                }
             }
 
-            // If temperature is neither falling or rising, use last direction to calculate setpoint
-            if (s.temp == node.lastTemp) {
-                isTempFalling = node.lastDirection == 'falling' ? true : false;
-                isTempRising = node.lastDirection == 'rising' ? true : false;
-            }
-
-            let heatPoint = isTempFalling ? s.setpoint_heat - node.tolerance + 0.1 : s.setpoint_heat;
-            let coolPoint = isTempRising ? s.setpoint_cool + node.tolerance - 0.1 : s.setpoint_cool;
-
-            // Store last temp
-            node.lastTemp = s.temp;
-
-            // Calculate what to do based on temp, setpoint and other settings.
-            if (canHeat && s.temp < heatPoint) {
-                if (!node.lastCoolTime || now.diff(node.lastCoolTime) >= node.swapDelayMs ) return 'heating';
-                if (now.diff(node.lastCoolTime) < node.swapDelayMs) s.pending = true;
-            } else if (canCool && s.temp > coolPoint) {
-                if (!node.lastHeatTime || now.diff(node.lastHeatTime) >= node.swapDelayMs) return 'cooling';
-                if (now.diff(node.lastHeatTime) < node.swapDelayMs) s.pending = true;
-            }
             return offValue;
         }
 
@@ -363,11 +359,14 @@ module.exports = function(RED) {
             // Current Status
             let s = {
                 mode: node.mode.get(),
+                modeChanged: false,
                 preset: node.preset.get(),
                 setpoint: node.setpoint.get(),
                 setpoint_heat: node.setpoint_heat.get(),
                 setpoint_cool: node.setpoint_cool.get(),
+                setpointChanged: false,
                 temp: node.temp.get(),
+                tempChanged: false,
                 tempTime: node.temp.time(),
                 tempValid: false,
 		differentialTemp: 0,
@@ -377,6 +376,7 @@ module.exports = function(RED) {
                 changed: false,
                 pending: false,
                 keepAlive: false,
+                sendMessage: false,
 		weight: 0,
 		trigger: false
             };
@@ -416,6 +416,30 @@ module.exports = function(RED) {
                 }
             }
 
+            // Update status on temperature change
+            if (s.temp != node.lastTemp) {
+            s.changed = true;
+            s.tempChanged = true;
+            node.lastTemp = s.temp;
+            }
+
+            // Update status on setpoint change
+            if (s.setpoint_heat != node.lastHeatSetpoint) {
+            s.setpointChanged = true;
+            node.lastHeatSetpoint = s.setpoint_heat;
+            } else if (s.setpoint_cool != node.lastCoolSetpoint) {
+            s.setpointChanged = true;
+            node.lastCoolSetpoint = s.setpoint_cool;
+            }
+
+            // Update status on mode change
+            if (s.mode != node.lastMode) {
+            s.modeChanged = true;
+            node.lastMode = s.mode;
+            }
+
+            s.sendMessage = (s.modeChanged || s.setpointChanged || s.tempChanged) ? true : false;
+
             // Heating / cooling states
             let heating = s.action === 'heating';
             let cooling = s.action === 'cooling';
@@ -431,6 +455,18 @@ module.exports = function(RED) {
                     s.pending = true;
                     //node.updateTimeout = setTimeout(node.update, node.OffTimeMs - diff2);
                     node.updateStatus(s);
+
+                    // Keep sending status keepAlive updates during offDelay
+                    if (s.sendMessage) {
+                        var clonedMsg = RED.util.cloneMessage({ topic: this.sendTopic, status: s });
+                        node.send([ null, null, clonedMsg ]);
+                        node.lastSend = now;
+                        // Send the stored states to the dedicated outputs to prevent them turning off during cycleDelay
+                        node.send([ 
+                            { topic: this.sendTopic, payload: node.heatOutput === true ? node.onPayload : node.offPayload }, 
+                            { topic: this.sendTopic, payload: node.coolOutput === true ? node.onPayload : node.offPayload } 
+                        ]);
+                    }
                     return;
                 }	
                 if (node.lastChange) {
@@ -440,6 +476,18 @@ module.exports = function(RED) {
                         s.pending = true;
                         //node.updateTimeout = setTimeout(node.update, node.cycleDelayMs - diff);
                         node.updateStatus(s);
+
+                        // Keep sending status keepAlive updates during cycleDelay
+                        if (s.sendMessage) {
+                            var clonedMsg = RED.util.cloneMessage({ topic: this.sendTopic, status: s });
+                            node.send([ null, null, clonedMsg ]);
+                            node.lastSend = now;
+                            // Send the stored states to the dedicated outputs to prevent them turning off during cycleDelay
+                            node.send([ 
+                                { topic: this.sendTopic, payload: node.heatOutput === true ? node.onPayload : node.offPayload }, 
+                                { topic: this.sendTopic, payload: node.coolOutput === true ? node.onPayload : node.offPayload } 
+                            ]);
+                        }
                         return;
                     }
                 }				
@@ -456,7 +504,7 @@ module.exports = function(RED) {
             }
 
             // Send a message
-            if (s.changed || s.keepAlive) {
+            if (s.sendMessage || s.changed) {
                 node.lastSend = now;
                 node.send([ 
                     { topic: this.sendTopic, payload: node.getOutput(heating) }, 
@@ -468,6 +516,12 @@ module.exports = function(RED) {
                 s.coolOutput = node.getOutput(cooling) === node.onPayload ? true : false;
                 node.heatOutput = s.heatOutput;
                 node.coolOutput = s.coolOutput;
+
+                // Only send status at keepAlive intervals or changes
+                if (node.sendStatus) {
+                    var clonedMsg = RED.util.cloneMessage({ topic: this.sendTopic, status: s });
+                    node.send([ null, null, clonedMsg ]);
+                }
             }
 
             // Update status
@@ -642,6 +696,8 @@ module.exports = function(RED) {
         // Initial update
         node.setStatus({fill:'grey', shape:'dot', text:'starting...'});
         setTimeout(function() { 
+            // startup init
+            if (node.lastAction === undefined) node.lastAction = 'off';
             node.starting = false;
             node.update();
             node.lastChange = null;
