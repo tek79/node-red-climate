@@ -438,7 +438,7 @@ module.exports = function(RED) {
             node.lastMode = s.mode;
             }
 
-            s.sendMessage = (s.modeChanged || s.setpointChanged || s.tempChanged) ? true : false;
+            s.sendMessage = (s.modeChanged || s.setpointChanged || s.tempChanged || s.keepAlive) ? true : false;
 
             // Heating / cooling states
             let heating = s.action === 'heating';
